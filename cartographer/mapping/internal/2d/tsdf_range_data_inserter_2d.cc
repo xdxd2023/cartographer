@@ -180,7 +180,7 @@ void TSDFRangeDataInserter2D::InsertHit(
   const Eigen::Vector2f ray_end = origin + (1.0f + truncation_ratio) * ray;
   std::pair<Eigen::Array2i, Eigen::Array2i> superscaled_ray =
       SuperscaleRay(ray_begin, ray_end, tsdf);
-  std::vector<Eigen::Array2i> ray_mask = RayToPixelMask(
+  std::vector<Eigen::Array2i, Eigen::aligned_allocator<Eigen::Array2i>> ray_mask = RayToPixelMask(
       superscaled_ray.first, superscaled_ray.second, kSubpixelScale);
 
   // Precompute weight factors.

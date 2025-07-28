@@ -51,7 +51,7 @@ sensor::RangeData FilterRangeDataByMaxRange(const sensor::RangeData& range_data,
 std::vector<PixelData> AccumulatePixelData(
     const int width, const int height, const Eigen::Array2i& min_index,
     const Eigen::Array2i& max_index,
-    const std::vector<Eigen::Array4i>& voxel_indices_and_probabilities) {
+    const std::vector<Eigen::Array4i, Eigen::aligned_allocator<Eigen::Array4i>>& voxel_indices_and_probabilities) {
   std::vector<PixelData> accumulated_pixel_data(width * height);
   for (const Eigen::Array4i& voxel_index_and_probability :
        voxel_indices_and_probabilities) {
@@ -77,10 +77,10 @@ std::vector<PixelData> AccumulatePixelData(
 // The first three entries of each returned value are a cell_index and the
 // last is the corresponding probability value. We batch them together like
 // this to only have one vector and have better cache locality.
-std::vector<Eigen::Array4i> ExtractVoxelData(
+std::vector<Eigen::Array4i, Eigen::aligned_allocator<Eigen::Array4i>> ExtractVoxelData(
     const HybridGrid& hybrid_grid, const transform::Rigid3f& transform,
     Eigen::Array2i* min_index, Eigen::Array2i* max_index) {
-  std::vector<Eigen::Array4i> voxel_indices_and_probabilities;
+  std::vector<Eigen::Array4i, Eigen::aligned_allocator<Eigen::Array4i>> voxel_indices_and_probabilities;
   const float resolution_inverse = 1.f / hybrid_grid.resolution();
 
   constexpr float kXrayObstructedCellProbabilityLimit = 0.501f;
@@ -154,7 +154,7 @@ void AddToTextureProto(
   // Compute a bounding box for the texture.
   Eigen::Array2i min_index(INT_MAX, INT_MAX);
   Eigen::Array2i max_index(INT_MIN, INT_MIN);
-  const std::vector<Eigen::Array4i> voxel_indices_and_probabilities =
+  const std::vector<Eigen::Array4i, Eigen::aligned_allocator<Eigen::Array4i>> voxel_indices_and_probabilities =
       ExtractVoxelData(hybrid_grid, global_submap_pose.cast<float>(),
                        &min_index, &max_index);
 

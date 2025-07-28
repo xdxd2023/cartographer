@@ -37,8 +37,8 @@ class RangeDataTest : public ::testing::Test {
     misses_.emplace_back(7, 8, 9);
   }
   Eigen::Vector3f origin_;
-  std::vector<Eigen::Vector3f> returns_;
-  std::vector<Eigen::Vector3f> misses_;
+  std::vector<Eigen::Vector3f, Eigen::aligned_allocator<Eigen::Vector3f>> returns_;
+  std::vector<Eigen::Vector3f, Eigen::aligned_allocator<Eigen::Vector3f>> misses_;
 };
 
 }  // namespace

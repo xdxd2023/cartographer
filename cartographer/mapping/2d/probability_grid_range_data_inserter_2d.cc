@@ -80,10 +80,10 @@ void DrawLine(int x0, int y0, int x1, int y1, int expend,
   }
 }
 
-std::vector<Eigen::Array2i> GetEndNear(const Eigen::Array2i& begin,
+std::vector<Eigen::Array2i, Eigen::aligned_allocator<Eigen::Array2i>> GetEndNear(const Eigen::Array2i& begin,
                                        const Eigen::Array2i& end,
                                        int tolerance) {
-  std::vector<Eigen::Array2i> result;
+  std::vector<Eigen::Array2i, Eigen::aligned_allocator<Eigen::Array2i>> result;
   if (begin[0] == end[0] && begin[1] == end[1]) {
     result.push_back(end);
     return result;
@@ -115,7 +115,7 @@ void CastRays(const sensor::RangeData& range_data,
   const Eigen::Array2i begin =
       superscaled_limits.GetCellIndex(range_data.origin.head<2>());
   // Compute and add the end points.
-  std::vector<Eigen::Array2i> ends;
+  std::vector<Eigen::Array2i, Eigen::aligned_allocator<Eigen::Array2i>> ends;
   ends.reserve(range_data.returns.size());
 
   for (const sensor::RangefinderPoint& hit : range_data.returns) {
@@ -129,7 +129,7 @@ void CastRays(const sensor::RangeData& range_data,
 
   // Now add the misses.
   for (const Eigen::Array2i& end : ends) {
-    std::vector<Eigen::Array2i> ray =
+    std::vector<Eigen::Array2i, Eigen::aligned_allocator<Eigen::Array2i>> ray =
         RayToPixelMask(begin, end, kSubpixelScale);
     for (const Eigen::Array2i& cell_index : ray) {
       probability_grid->ApplyLookupTable(cell_index, miss_table);
@@ -138,7 +138,7 @@ void CastRays(const sensor::RangeData& range_data,
 
   // Finally, compute and add empty rays based on misses in the range data.
   for (const sensor::RangefinderPoint& missing_echo : range_data.misses) {
-    std::vector<Eigen::Array2i> ray = RayToPixelMask(
+    std::vector<Eigen::Array2i, Eigen::aligned_allocator<Eigen::Array2i>> ray = RayToPixelMask(
         begin, superscaled_limits.GetCellIndex(missing_echo.position.head<2>()),
         kSubpixelScale);
     for (const Eigen::Array2i& cell_index : ray) {
@@ -162,7 +162,7 @@ int TryCastRays(const sensor::RangeData& range_data,
       superscaled_limits.GetCellIndex(range_data.origin.head<2>());
 
   // Compute and add the end points.
-  std::vector<Eigen::Array2i> ends;
+  std::vector<Eigen::Array2i, Eigen::aligned_allocator<Eigen::Array2i>> ends;
   ends.reserve(range_data.returns.size());
   auto origin = range_data.origin.head<2>();
   for (const sensor::RangefinderPoint& hit : range_data.returns) {
@@ -196,7 +196,7 @@ int TryCastRays(const sensor::RangeData& range_data,
 
   // Now add the misses.
   for (const Eigen::Array2i& end : ends) {
-    std::vector<Eigen::Array2i> ray =
+    std::vector<Eigen::Array2i, Eigen::aligned_allocator<Eigen::Array2i>> ray =
         RayToPixelMask(begin, end, kSubpixelScale);
     for (const Eigen::Array2i& cell_index : ray) {
       if (probability_grid->GetProbability(cell_index) > 0.9) {
@@ -226,7 +226,7 @@ void CastRays(const sensor::RangeData& range_data,
       superscaled_limits.GetCellIndex(range_data.origin.head<2>());
 
   // Compute and add the end points.
-  std::vector<Eigen::Array2i> ends;
+  std::vector<Eigen::Array2i, Eigen::aligned_allocator<Eigen::Array2i>> ends;
   ends.reserve(range_data.returns.size());
   size_t repeat_hit = 0;
   auto origin = range_data.origin.head<2>();
@@ -273,7 +273,7 @@ void CastRays(const sensor::RangeData& range_data,
 
   // Now add the misses.
   for (const Eigen::Array2i& end : ends) {
-    std::vector<Eigen::Array2i> ray =
+    std::vector<Eigen::Array2i, Eigen::aligned_allocator<Eigen::Array2i>> ray =
         RayToPixelMask(begin, end, kSubpixelScale);
     for (const Eigen::Array2i& cell_index : ray) {
       probability_grid->ApplyLookupTable(cell_index, miss_table);
@@ -282,7 +282,7 @@ void CastRays(const sensor::RangeData& range_data,
 
   // Finally, compute and add empty rays based on misses in the range data.
   for (const sensor::RangefinderPoint& missing_echo : range_data.misses) {
-    std::vector<Eigen::Array2i> ray = RayToPixelMask(
+    std::vector<Eigen::Array2i, Eigen::aligned_allocator<Eigen::Array2i>> ray = RayToPixelMask(
         begin, superscaled_limits.GetCellIndex(missing_echo.position.head<2>()),
         kSubpixelScale);
     for (const Eigen::Array2i& cell_index : ray) {

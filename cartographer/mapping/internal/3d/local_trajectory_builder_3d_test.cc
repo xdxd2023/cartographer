@@ -295,7 +295,7 @@ class LocalTrajectoryBuilderTest : public ::testing::Test {
   }
 
   std::unique_ptr<LocalTrajectoryBuilder3D> local_trajectory_builder_;
-  std::vector<Eigen::Vector3f> bubbles_;
+  std::vector<Eigen::Vector3f, Eigen::aligned_allocator<Eigen::Vector3f>> bubbles_;
 };
 
 TEST_F(LocalTrajectoryBuilderTest, MoveInsideCubeUsingOnlyCeresScanMatcher) {

@@ -79,7 +79,7 @@ PrecomputationGridStack3D::PrecomputationGridStack3D(
 struct DiscreteScan3D {
   transform::Rigid3f pose;
   // Contains a vector of discretized scans for each 'depth'.
-  std::vector<std::vector<Eigen::Array3i>> cell_indices_per_depth;
+  std::vector<std::vector<Eigen::Array3i, Eigen::aligned_allocator<Eigen::Array3i>>> cell_indices_per_depth;
   float rotational_score;
 };
 
@@ -201,10 +201,10 @@ DiscreteScan3D FastCorrelativeScanMatcher3D::DiscretizeScan(
     const FastCorrelativeScanMatcher3D::SearchParameters& search_parameters,
     const sensor::PointCloud& point_cloud, const transform::Rigid3f& pose,
     const float rotational_score) const {
-  std::vector<std::vector<Eigen::Array3i>> cell_indices_per_depth;
+  std::vector<std::vector<Eigen::Array3i, Eigen::aligned_allocator<Eigen::Array3i>>> cell_indices_per_depth;
   const PrecomputationGrid3D& original_grid =
       precomputation_grid_stack_->Get(0);
-  std::vector<Eigen::Array3i> full_resolution_cell_indices;
+  std::vector<Eigen::Array3i, Eigen::aligned_allocator<Eigen::Array3i>> full_resolution_cell_indices;
   for (const sensor::RangefinderPoint& point :
        sensor::TransformPointCloud(point_cloud, pose)) {
     full_resolution_cell_indices.push_back(

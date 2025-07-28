@@ -40,7 +40,7 @@ struct TimedPointCloudOriginData {
     size_t origin_index;
   };
   common::Time time;
-  std::vector<Eigen::Vector3f> origins;
+  std::vector<Eigen::Vector3f, Eigen::aligned_allocator<Eigen::Vector3f>> origins;
   std::vector<RangeMeasurement> ranges;
 };
 
