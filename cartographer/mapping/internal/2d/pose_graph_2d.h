@@ -277,6 +277,11 @@ class PoseGraph2D : public PoseGraph {
 
   PoseGraphData data_ GUARDED_BY(mutex_);
 
+  // Accumulated whole-map rotation applied to every returned submap pose so
+  // the displayed map can be rotated (e.g. straighten walls) without touching
+  // the local SLAM frame. Applied in GetSubmapDataUnderLock.
+  transform::Rigid3d map_rotation_ = transform::Rigid3d::Identity();
+
   ValueConversionTables conversion_tables_;
 
   // Allows querying and manipulating the pose graph by the 'trimmers_'. The

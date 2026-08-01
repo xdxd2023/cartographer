@@ -177,28 +177,12 @@ std::shared_ptr<const Submap> PoseGraph2D::GetSubmap(SubmapId id)
 
 void PoseGraph2D::RotateMap(const transform::Rigid3d& rotation) {
   absl::MutexLock locker(&mutex_);
-  // 'MapById' iterators yield const data, so collect the ids first and then
-  // mutate through the mutable 'at()' accessor.
-  std::vector<SubmapId> submap_ids;
-  for (const auto& id_data : data_.submap_data) {
-    submap_ids.push_back(id_data.id);
-  }
-  for (const SubmapId& submap_id : submap_ids) {
-    auto& entry = data_.submap_data.at(submap_id);
-    // Rotate the local pose of every submap so the trajectory-local frame
-    // stays consistent (future scans keep matching), and rotate its global
-    // pose so the drawn map is rotated. Rotating both keeps the local->global
-    // transform self-consistent for submaps whose pose is extrapolated.
-    Submap* const submap = const_cast<Submap*>(entry.submap.get());
-    submap->SetLocalPose(rotation * submap->local_pose());
-    if (data_.global_submap_poses_2d.Contains(submap_id)) {
-      data_.global_submap_poses_2d.at(submap_id).global_pose =
-          transform::Project2D(
-              rotation * transform::Embed3D(data_.global_submap_poses_2d.at(
-                                                  submap_id)
-                                                  .global_pose));
-    }
-  }
+  // Accumulate the rotation; every returned submap pose is multiplied by
+  // 'map_rotation_' in GetSubmapDataUnderLock, so the displayed map rotates
+  // for both loaded submaps (global poses) and building-mode submaps
+  // (extrapolated poses). The local SLAM frame is left untouched so future
+  // scans keep matching.
+  map_rotation_ = rotation * map_rotation_;
   // Rotate all node global poses.
   std::vector<NodeId> node_ids;
   for (const auto& id_data : data_.trajectory_nodes) {
@@ -207,10 +191,6 @@ void PoseGraph2D::RotateMap(const transform::Rigid3d& rotation) {
   for (const NodeId& node_id : node_ids) {
     data_.trajectory_nodes.at(node_id).global_pose =
         rotation * data_.trajectory_nodes.at(node_id).global_pose;
-  }
-  // Rotate all initial trajectory poses.
-  for (auto& it : data_.initial_trajectory_poses) {
-    it.second.relative_pose = rotation * it.second.relative_pose;
   }
 }
 
@@ -1220,13 +1200,16 @@ PoseGraphInterface::SubmapData PoseGraph2D::GetSubmapDataUnderLock(
   if (data_.global_submap_poses_2d.Contains(submap_id)) {
     // We already have an optimized pose.
     return {submap,
-            transform::Embed3D(
-                data_.global_submap_poses_2d.at(submap_id).global_pose)};
+            map_rotation_ * transform::Embed3D(
+                                data_.global_submap_poses_2d.at(submap_id)
+                                    .global_pose)};
   }
   // We have to extrapolate.
-  return {submap, ComputeLocalToGlobalTransform(data_.global_submap_poses_2d,
-                                                submap_id.trajectory_id) *
-                      submap->local_pose()};
+  return {submap,
+          map_rotation_ * ComputeLocalToGlobalTransform(
+                              data_.global_submap_poses_2d,
+                              submap_id.trajectory_id) *
+              submap->local_pose()};
 }
 
 PoseGraph2D::TrimmingHandle::TrimmingHandle(PoseGraph2D* const parent)
