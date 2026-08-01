@@ -150,25 +150,37 @@ void CastRays(const sensor::RangeData& range_data,
   }
 }
 
-// Returns the best (highest-probability) cell within a 'tolerance' cell radius
-// of 'end_cell' that is already an occupied wall (probability strictly above
-// 'hit_probability'). Returns absl::nullopt if no such cell exists.
+// Returns the nearest cell (Chebyshev distance, ties broken by higher
+// probability) within a 'tolerance' cell radius of 'end_cell' that is already
+// an occupied wall (probability strictly above 'hit_probability'). Returns
+// absl::nullopt if no such cell exists.
 absl::optional<Eigen::Array2i> FindExistingWall(
     const ProbabilityGrid* probability_grid, const Eigen::Array2i& end_cell,
     int tolerance, float hit_probability) {
   absl::optional<Eigen::Array2i> best;
+  int best_distance = tolerance + 1;
   float best_probability = hit_probability;
   for (int dx = -tolerance; dx <= tolerance; ++dx) {
     for (int dy = -tolerance; dy <= tolerance; ++dy) {
       const Eigen::Array2i cell = end_cell + Eigen::Array2i(dx, dy);
       const float probability = probability_grid->GetProbability(cell);
-      if (probability > best_probability) {
-        best = cell;
-        best_probability = probability;
+      if (probability > hit_probability) {
+        const int distance = std::max(std::abs(dx), std::abs(dy));
+        if (distance < best_distance ||
+            (distance == best_distance && probability > best_probability)) {
+          best = cell;
+          best_distance = distance;
+          best_probability = probability;
+        }
       }
     }
   }
   return best;
+}
+
+bool IsWallCell(const ProbabilityGrid* probability_grid,
+                const Eigen::Array2i& cell, float hit_probability) {
+  return probability_grid->GetProbability(cell) > hit_probability;
 }
 
 int TryCastRays(const sensor::RangeData& range_data,
@@ -291,20 +303,45 @@ void CastRays(const sensor::RangeData& range_data,
     end_index = end_index.max(Eigen::Array2i::Zero());
     const Eigen::Array2i end_cell = end_index / kSubpixelScale;
 
-    // If the endpoint is on (or very close to) an already-mapped wall, do not
-    // create a new occupied cell next to it. Instead reinforce the existing
-    // wall cell and stop the miss ray there. This keeps walls from getting
-    // thicker as the same boundary is observed again and again.
+    // 命中点本身已经是一堵墙：只加强该墙格，不新增占据格（防止墙体变厚）。
+    if (IsWallCell(probability_grid, end_cell, options.hit_probability())) {
+      probability_grid->ApplyLookupTable(end_cell, hit_table);
+      ends.push_back(end_index);
+      continue;
+    }
+
+    // 命中点旁（容差内）最近的已存在墙。若没有，说明这是全新区域
+    // （墙的边缘延伸、新墙段），直接新增占据格。
     const auto existing_wall = FindExistingWall(
         probability_grid, end_cell, options.hit_tolerance_grid(),
         options.hit_probability());
-    if (existing_wall.has_value()) {
-      probability_grid->ApplyLookupTable(existing_wall.value(), hit_table);
-      ends.push_back(existing_wall.value() * kSubpixelScale);
-    } else {
+    if (!existing_wall.has_value()) {
       ends.push_back(end_index);
       probability_grid->ApplyLookupTable(end_cell, hit_table);
       new_hit++;
+      continue;
+    }
+
+    const Eigen::Array2i wall = existing_wall.value();
+    // 判定命中点是否位于该墙的延伸方向上：墙在背离命中点的方向（wall + away）
+    // 还有连续墙格，说明命中点在墙体边缘的延长线上，应该补齐该边缘；
+    // 否则命中点只是墙表面的重复观测（偏移一格的噪声），只加强不新增。
+    const Eigen::Array2i away = (wall - end_cell).sign();
+    if (away.isZero()) {
+      // 理论上不会走到（end_cell 不是墙），保险起见按重复观测处理
+      probability_grid->ApplyLookupTable(wall, hit_table);
+      ends.push_back(wall * kSubpixelScale);
+      continue;
+    }
+    if (IsWallCell(probability_grid, wall + away, options.hit_probability())) {
+      // 墙的边缘延伸：新增占据格，让墙的边缘补齐
+      ends.push_back(end_index);
+      probability_grid->ApplyLookupTable(end_cell, hit_table);
+      new_hit++;
+    } else {
+      // 重复观测：加强已有墙，miss 射线在此停止，避免侵蚀墙边界
+      probability_grid->ApplyLookupTable(wall, hit_table);
+      ends.push_back(wall * kSubpixelScale);
     }
   }
 
