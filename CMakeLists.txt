@@ -27,7 +27,9 @@ option(BUILD_PROMETHEUS "build Prometheus monitoring support" false)
 
 include("${PROJECT_SOURCE_DIR}/cmake/functions.cmake")
 google_initialize_cartographer_project()
-google_enable_testing()
+if(BUILD_TESTING)
+  google_enable_testing()
+endif()
 
 find_package(absl REQUIRED)
 set(BOOST_COMPONENTS iostreams)
