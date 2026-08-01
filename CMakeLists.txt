@@ -287,6 +287,10 @@ target_link_libraries(${PROJECT_NAME} PUBLIC ${PROTOBUF_LIBRARY}
 if (NOT WIN32)
   target_link_libraries(${PROJECT_NAME} PUBLIC pthread)
 endif()
+# Embedded / cross-compile: don't require 16-byte alignment for Eigen fixed-size
+# vectorizable types (Rigid3d contains a Quaterniond). `new` on the ARM toolchain
+# only guarantees 8-byte alignment, which triggered Eigen_unaligned_array_assert.
+target_compile_definitions(${PROJECT_NAME} PUBLIC EIGEN_MAX_ALIGN_BYTES=0)
 if(${BUILD_GRPC})
   target_link_libraries(${PROJECT_NAME} PUBLIC grpc++)
   target_link_libraries(${PROJECT_NAME} PUBLIC async_grpc)
