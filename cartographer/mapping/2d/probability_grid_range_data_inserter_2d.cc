@@ -288,7 +288,6 @@ void CastRays(const sensor::RangeData& range_data,
   // Compute and add the end points.
   std::vector<Eigen::Array2i, Eigen::aligned_allocator<Eigen::Array2i>> ends;
   ends.reserve(range_data.returns.size());
-  size_t new_hit = 0;
   auto origin = range_data.origin.head<2>();
 
   for (const sensor::RangefinderPoint& hit : range_data.returns) {
@@ -318,7 +317,6 @@ void CastRays(const sensor::RangeData& range_data,
     if (!existing_wall.has_value()) {
       ends.push_back(end_index);
       probability_grid->ApplyLookupTable(end_cell, hit_table);
-      new_hit++;
       continue;
     }
 
@@ -337,7 +335,6 @@ void CastRays(const sensor::RangeData& range_data,
       // 墙的边缘延伸：新增占据格，让墙的边缘补齐
       ends.push_back(end_index);
       probability_grid->ApplyLookupTable(end_cell, hit_table);
-      new_hit++;
     } else {
       // 重复观测：加强已有墙，miss 射线在此停止，避免侵蚀墙边界
       probability_grid->ApplyLookupTable(wall, hit_table);
@@ -346,12 +343,6 @@ void CastRays(const sensor::RangeData& range_data,
   }
 
   if (!insert_free_space) {
-    return;
-  }
-
-  // The frame is fully consistent with the existing map (no new occupied
-  // cells were created); leave the free-space grid untouched as well.
-  if (new_hit == 0) {
     return;
   }
 
