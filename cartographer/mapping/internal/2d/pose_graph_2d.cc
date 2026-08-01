@@ -175,6 +175,45 @@ std::shared_ptr<const Submap> PoseGraph2D::GetSubmap(SubmapId id)
   return (data_.submap_data.at(id).submap);
 }
 
+void PoseGraph2D::RotateMap(const transform::Rigid3d& rotation) {
+  absl::MutexLock locker(&mutex_);
+  // 'MapById' iterators yield const data, so collect the ids first and then
+  // mutate through the mutable 'at()' accessor.
+  std::vector<SubmapId> submap_ids;
+  for (const auto& id_data : data_.submap_data) {
+    submap_ids.push_back(id_data.id);
+  }
+  for (const SubmapId& submap_id : submap_ids) {
+    auto& entry = data_.submap_data.at(submap_id);
+    // Rotate the local pose of every submap so the trajectory-local frame
+    // stays consistent (future scans keep matching), and rotate its global
+    // pose so the drawn map is rotated. Rotating both keeps the local->global
+    // transform self-consistent for submaps whose pose is extrapolated.
+    Submap* const submap = const_cast<Submap*>(entry.submap.get());
+    submap->SetLocalPose(rotation * submap->local_pose());
+    if (data_.global_submap_poses_2d.Contains(submap_id)) {
+      data_.global_submap_poses_2d.at(submap_id).global_pose =
+          transform::Project2D(
+              rotation * transform::Embed3D(data_.global_submap_poses_2d.at(
+                                                  submap_id)
+                                                  .global_pose));
+    }
+  }
+  // Rotate all node global poses.
+  std::vector<NodeId> node_ids;
+  for (const auto& id_data : data_.trajectory_nodes) {
+    node_ids.push_back(id_data.id);
+  }
+  for (const NodeId& node_id : node_ids) {
+    data_.trajectory_nodes.at(node_id).global_pose =
+        rotation * data_.trajectory_nodes.at(node_id).global_pose;
+  }
+  // Rotate all initial trajectory poses.
+  for (auto& it : data_.initial_trajectory_poses) {
+    it.second.relative_pose = rotation * it.second.relative_pose;
+  }
+}
+
 NodeId PoseGraph2D::AddNode(
     std::shared_ptr<const TrajectoryNode::Data> constant_data,
     const int trajectory_id,

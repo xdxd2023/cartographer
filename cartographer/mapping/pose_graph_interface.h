@@ -96,6 +96,11 @@ class PoseGraphInterface {
   // Waits for all computations to finish and computes optimized poses.
   virtual void RunFinalOptimization() = 0;
 
+  // Rotates the whole map (all submap poses in both the local and the global
+  // frame, and all node poses) by 'rotation'. Used to straighten a map whose
+  // walls are not aligned with the map axes. Default no-op.
+  virtual void RotateMap(const transform::Rigid3d& rotation) {}
+
   // Returns data for all submaps.
   virtual MapById<SubmapId, SubmapData> GetAllSubmapData() const = 0;
 

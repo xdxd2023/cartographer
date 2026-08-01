@@ -189,8 +189,11 @@ int Submap2D::GetChangedCountByInsert(
     const sensor::RangeData& range_data,
     const RangeDataInserterInterface* range_data_inserter) {
   CHECK(grid_);
-  CHECK(!insertion_finished());
-  return range_data_inserter->GetChangedCountByInsert(range_data, grid_.get());
+  // For finished (e.g. loaded) submaps the grid limits are fixed and must not
+  // be grown; the inserter then treats out-of-bounds points as changes so that
+  // misaligned candidates are still rejected by the wrong-frame check.
+  return range_data_inserter->GetChangedCountByInsert(
+      range_data, grid_.get(), /*allow_grow=*/!insertion_finished());
 }
 
 void Submap2D::Finish() {

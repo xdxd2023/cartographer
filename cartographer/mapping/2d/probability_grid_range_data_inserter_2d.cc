@@ -17,9 +17,12 @@
 #include "cartographer/mapping/2d/probability_grid_range_data_inserter_2d.h"
 
 #include <cstdlib>
+#include <functional>
+#include <limits>
 
 #include "Eigen/Core"
 #include "Eigen/Geometry"
+#include "absl/types/optional.h"
 #include "cartographer/mapping/2d/xy_index.h"
 #include "cartographer/mapping/internal/2d/ray_to_pixel_mask.h"
 #include "cartographer/mapping/probability_values.h"
@@ -147,9 +150,35 @@ void CastRays(const sensor::RangeData& range_data,
   }
 }
 
+// Returns the best (highest-probability) cell within a 'tolerance' cell radius
+// of 'end_cell' that is already an occupied wall (probability strictly above
+// 'hit_probability'). Returns absl::nullopt if no such cell exists.
+absl::optional<Eigen::Array2i> FindExistingWall(
+    const ProbabilityGrid* probability_grid, const Eigen::Array2i& end_cell,
+    int tolerance, float hit_probability) {
+  absl::optional<Eigen::Array2i> best;
+  float best_probability = hit_probability;
+  for (int dx = -tolerance; dx <= tolerance; ++dx) {
+    for (int dy = -tolerance; dy <= tolerance; ++dy) {
+      const Eigen::Array2i cell = end_cell + Eigen::Array2i(dx, dy);
+      const float probability = probability_grid->GetProbability(cell);
+      if (probability > best_probability) {
+        best = cell;
+        best_probability = probability;
+      }
+    }
+  }
+  return best;
+}
+
 int TryCastRays(const sensor::RangeData& range_data,
-                ProbabilityGrid* probability_grid) {
-  GrowAsNeeded(range_data, probability_grid);
+                ProbabilityGrid* probability_grid, bool allow_grow) {
+  // Growing mutates the grid and is only possible while the submap is still
+  // being inserted into. For finished (e.g. loaded) submaps the limits are
+  // fixed; points falling outside are counted as changes instead.
+  if (allow_grow) {
+    GrowAsNeeded(range_data, probability_grid);
+  }
 
   int change = 0;
   const MapLimits& limits = probability_grid->limits();
@@ -158,8 +187,18 @@ int TryCastRays(const sensor::RangeData& range_data,
       superscaled_resolution, limits.max(),
       CellLimits(limits.cell_limits().num_x_cells * kSubpixelScale,
                  limits.cell_limits().num_y_cells * kSubpixelScale));
-  const Eigen::Array2i begin =
+  Eigen::Array2i begin =
       superscaled_limits.GetCellIndex(range_data.origin.head<2>());
+  const Eigen::Array2i begin_cell = begin / kSubpixelScale;
+  // 只读模式（已完成/加载的子图）下，若扫描原点落在子图外，无法可靠计算射线
+  // （GetCellIndex 会产生负索引，RayToPixelMask 会 CHECK 崩溃）。此时该帧与子图
+  // 明显不匹配，直接视为错误帧（返回大量变化）。
+  if (!allow_grow && !limits.Contains(begin_cell)) {
+    return static_cast<int>(range_data.returns.size()) * 2;
+  }
+  // 钳制亚像素级负偏移（cell 0 边缘、浮点精度导致的小负数）到 0，
+  // 避免 RayToPixelMask 的 CHECK(scaled_* >= 0) 崩溃。
+  begin = begin.max(Eigen::Array2i::Zero());
 
   // Compute and add the end points.
   std::vector<Eigen::Array2i, Eigen::aligned_allocator<Eigen::Array2i>> ends;
@@ -172,9 +211,19 @@ int TryCastRays(const sensor::RangeData& range_data,
       continue;
     }
 
+    Eigen::Array2i end_index =
+        superscaled_limits.GetCellIndex(hit.position.head<2>());
+    end_index = end_index.max(Eigen::Array2i::Zero());
+    const Eigen::Array2i end_cell = end_index / kSubpixelScale;
+    if (!allow_grow && !limits.Contains(end_cell)) {
+      // The point falls outside the finished submap; inserting it would create
+      // new occupied cells, so it counts as a change.
+      change += 2;
+      continue;
+    }
+
     bool is_new_hit = true;
-    auto near = GetEndNear(
-        begin, superscaled_limits.GetCellIndex(hit.position.head<2>()), 3);
+    auto near = GetEndNear(begin, end_index, 3);
     for (auto& point : near) {
       if (probability_grid->GetProbability(point / kSubpixelScale) > 0.5) {
         is_new_hit = false;
@@ -183,16 +232,14 @@ int TryCastRays(const sensor::RangeData& range_data,
     }
 
     if (is_new_hit) {
-      ends.push_back(superscaled_limits.GetCellIndex(hit.position.head<2>()));
+      ends.push_back(end_index);
       if (probability_grid->GetProbability(ends.back() / kSubpixelScale) != 0) {
-        change+=2;
+        change += 2;
       }
     } else {
-      ends.push_back(near.front());
+      ends.push_back(near.front().max(Eigen::Array2i::Zero()));
     }
   }
-
-  LOG(INFO) << "hit change: " << change;
 
   // Now add the misses.
   for (const Eigen::Array2i& end : ends) {
@@ -205,7 +252,6 @@ int TryCastRays(const sensor::RangeData& range_data,
     }
   }
 
-  LOG(INFO) <<"miss change: " << change;
   return change;
 }
 
@@ -222,13 +268,15 @@ void CastRays(const sensor::RangeData& range_data,
       superscaled_resolution, limits.max(),
       CellLimits(limits.cell_limits().num_x_cells * kSubpixelScale,
                  limits.cell_limits().num_y_cells * kSubpixelScale));
-  const Eigen::Array2i begin =
+  Eigen::Array2i begin =
       superscaled_limits.GetCellIndex(range_data.origin.head<2>());
+  // 钳制亚像素级负偏移到 0，避免 RayToPixelMask 的 CHECK(scaled_* >= 0) 崩溃
+  begin = begin.max(Eigen::Array2i::Zero());
 
   // Compute and add the end points.
   std::vector<Eigen::Array2i, Eigen::aligned_allocator<Eigen::Array2i>> ends;
   ends.reserve(range_data.returns.size());
-  size_t repeat_hit = 0;
+  size_t new_hit = 0;
   auto origin = range_data.origin.head<2>();
 
   for (const sensor::RangefinderPoint& hit : range_data.returns) {
@@ -238,54 +286,71 @@ void CastRays(const sensor::RangeData& range_data,
       continue;
     }
 
-    bool is_new_hit = true;
-    auto near = GetEndNear(
-        begin, superscaled_limits.GetCellIndex(hit.position.head<2>()),
-        options.hit_tolerance_grid());
-    for (auto& point : near) {
-      if (probability_grid->GetProbability(point / kSubpixelScale) >
-          options.hit_probability()) {
-        probability_grid->ApplyLookupTable(point / kSubpixelScale,
-                                         hit_table);
-        repeat_hit++;
-        is_new_hit = false;
-        break;
-      }
-    }
+    Eigen::Array2i end_index =
+        superscaled_limits.GetCellIndex(hit.position.head<2>());
+    end_index = end_index.max(Eigen::Array2i::Zero());
+    const Eigen::Array2i end_cell = end_index / kSubpixelScale;
 
-    if (is_new_hit) {
-      ends.push_back(superscaled_limits.GetCellIndex(hit.position.head<2>()));
-      probability_grid->ApplyLookupTable(ends.back() / kSubpixelScale,
-                                         hit_table);
+    // If the endpoint is on (or very close to) an already-mapped wall, do not
+    // create a new occupied cell next to it. Instead reinforce the existing
+    // wall cell and stop the miss ray there. This keeps walls from getting
+    // thicker as the same boundary is observed again and again.
+    const auto existing_wall = FindExistingWall(
+        probability_grid, end_cell, options.hit_tolerance_grid(),
+        options.hit_probability());
+    if (existing_wall.has_value()) {
+      probability_grid->ApplyLookupTable(existing_wall.value(), hit_table);
+      ends.push_back(existing_wall.value() * kSubpixelScale);
     } else {
-      ends.push_back(near.front());
+      ends.push_back(end_index);
+      probability_grid->ApplyLookupTable(end_cell, hit_table);
+      new_hit++;
     }
-  }
-
-  if (repeat_hit < range_data.returns.size() / 2) {
-    LOG(INFO) << "repeat hit: " << repeat_hit << " "
-              << range_data.returns.size();
   }
 
   if (!insert_free_space) {
     return;
   }
 
-  // Now add the misses.
+  // The frame is fully consistent with the existing map (no new occupied
+  // cells were created); leave the free-space grid untouched as well.
+  if (new_hit == 0) {
+    return;
+  }
+
+  // Now add the misses. Miss rays stop at the first existing wall so that
+  // they never erode the wall boundaries.
   for (const Eigen::Array2i& end : ends) {
     std::vector<Eigen::Array2i, Eigen::aligned_allocator<Eigen::Array2i>> ray =
         RayToPixelMask(begin, end, kSubpixelScale);
     for (const Eigen::Array2i& cell_index : ray) {
+      if (probability_grid->GetProbability(cell_index) >
+          options.hit_probability()) {
+        break;
+      }
       probability_grid->ApplyLookupTable(cell_index, miss_table);
     }
   }
 
-  // Finally, compute and add empty rays based on misses in the range data.
+  // Finally, compute and add empty rays based on misses in the range data,
+  // limited to 'max_miss_length' so distant empty rays never wipe walls.
+  const size_t max_miss_cells =
+      options.max_miss_length() > 0
+          ? static_cast<size_t>(options.max_miss_length() /
+                                limits.resolution())
+          : std::numeric_limits<size_t>::max();
   for (const sensor::RangefinderPoint& missing_echo : range_data.misses) {
-    std::vector<Eigen::Array2i, Eigen::aligned_allocator<Eigen::Array2i>> ray = RayToPixelMask(
-        begin, superscaled_limits.GetCellIndex(missing_echo.position.head<2>()),
-        kSubpixelScale);
-    for (const Eigen::Array2i& cell_index : ray) {
+    std::vector<Eigen::Array2i, Eigen::aligned_allocator<Eigen::Array2i>> ray =
+        RayToPixelMask(
+            begin,
+            superscaled_limits.GetCellIndex(missing_echo.position.head<2>()),
+            kSubpixelScale);
+    for (size_t i = 0; i < ray.size() && i < max_miss_cells; ++i) {
+      const Eigen::Array2i& cell_index = ray[i];
+      if (probability_grid->GetProbability(cell_index) >
+          options.hit_probability()) {
+        break;
+      }
       probability_grid->ApplyLookupTable(cell_index, miss_table);
     }
   }
@@ -341,10 +406,11 @@ void ProbabilityGridRangeDataInserter2D::Insert(
 }
 
 int ProbabilityGridRangeDataInserter2D::GetChangedCountByInsert(
-    const sensor::RangeData& range_data, GridInterface* const grid) const {
+    const sensor::RangeData& range_data, GridInterface* const grid,
+    bool allow_grow) const {
   ProbabilityGrid* const probability_grid = static_cast<ProbabilityGrid*>(grid);
   CHECK(probability_grid != nullptr);
-  return TryCastRays(range_data, probability_grid);
+  return TryCastRays(range_data, probability_grid, allow_grow);
 }
 
 }  // namespace mapping

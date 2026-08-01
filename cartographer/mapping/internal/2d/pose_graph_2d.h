@@ -166,6 +166,8 @@ class PoseGraph2D : public PoseGraph {
   void UpdateSubmap(const int trajectory_id,
     const std::vector<std::shared_ptr<const Submap2D>>& insertion_submaps);
 
+  void RotateMap(const transform::Rigid3d& rotation) override;
+
  private:
   MapById<SubmapId, PoseGraphInterface::SubmapData> GetSubmapDataUnderLock()
       const EXCLUSIVE_LOCKS_REQUIRED(mutex_);
