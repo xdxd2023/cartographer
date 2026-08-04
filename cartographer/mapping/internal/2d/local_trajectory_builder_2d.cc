@@ -20,6 +20,7 @@
 #include <memory>
 
 #include "absl/memory/memory.h"
+#include "cartographer/mapping/2d/probability_grid.h"
 #include "cartographer/metrics/family_factory.h"
 #include "cartographer/sensor/range_data.h"
 #include "shell.hpp"
@@ -42,6 +43,8 @@ static auto* kScanMatcherResidualAngleMetric = metrics::Histogram::Null();
 static constexpr double kSlideTranslationThreshold = 0.1;
 // 打滑检测要求的最小匹配置信度（0-1）。
 static constexpr double kSlideMatchMinScore = 0.6;
+// 匹配后平移精细匹配：沿机器人前进方向（当前匹配角度）搜索的偏移范围（米）。
+static constexpr double kRefineTranslationRange = 0.3;
 
 static bool Valid()
 {
@@ -225,6 +228,52 @@ std::unique_ptr<transform::Rigid2d> LocalTrajectoryBuilder2D::ScanMatch(
 
     LOG(INFO) << "initial_ceres_pose: " << initial_ceres_pose
               << " pose_observation: " << *pose_observation;
+  }
+
+  // 在匹配位姿上再做一次平移精细匹配：固定当前角度，沿机器人前进方向
+  // （前/后）±0.3m 内逐一评分，若某个平移位姿得分更高则替换当前匹配位姿。
+  if (pose_observation != nullptr &&
+      matching_submap->grid()->GetGridType() == GridType::PROBABILITY_GRID) {
+    const ProbabilityGrid& probability_grid =
+        static_cast<const ProbabilityGrid&>(*matching_submap->grid());
+    auto score_at = [&](const transform::Rigid2d& pose) -> double {
+      double score = 0.0;
+      for (const sensor::RangefinderPoint& point :
+           filtered_gravity_aligned_point_cloud) {
+        const Eigen::Vector2d point_xy =
+            point.position.head<2>().cast<double>();
+        const Eigen::Array2i cell = probability_grid.limits().GetCellIndex(
+            (pose * point_xy).cast<float>());
+        score += probability_grid.GetProbability(cell);
+      }
+      return score /
+             static_cast<double>(filtered_gravity_aligned_point_cloud.size());
+    };
+
+    const transform::Rigid2d matched_pose = *pose_observation;
+    const Eigen::Rotation2Dd rotation = matched_pose.rotation();
+    const Eigen::Vector2d forward = rotation * Eigen::Vector2d::UnitX();
+    const double base_score = score_at(matched_pose);
+    double best_score = base_score;
+    transform::Rigid2d best_pose = matched_pose;
+    const double refine_step = matching_submap->grid()->limits().resolution();
+    for (double offset = -kRefineTranslationRange;
+         offset <= kRefineTranslationRange + 1e-9; offset += refine_step) {
+      const transform::Rigid2d candidate(
+          matched_pose.translation() + forward * offset, rotation);
+      const double candidate_score = score_at(candidate);
+      if (candidate_score > best_score) {
+        best_score = candidate_score;
+        best_pose = candidate;
+      }
+    }
+    if (best_score > base_score) {
+      LOG(INFO) << "ScanMatch translation refine: score " << base_score
+                << " -> " << best_score << ", offset "
+                << (best_pose.translation() - matched_pose.translation()).norm()
+                << " m, pose " << matched_pose << " -> " << best_pose;
+      *pose_observation = best_pose;
+    }
   }
 
   // 轮组卡住/打滑检测：里程计预测位姿与激光匹配位姿的平移偏差超过阈值，
