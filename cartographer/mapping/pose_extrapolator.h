@@ -56,6 +56,11 @@ class PoseExtrapolator : public PoseExtrapolatorInterface {
   transform::Rigid3d ExtrapolatePose(common::Time time) override;
   transform::Rigid3d ExtrapolatePoseLog(common::Time time);
   Eigen::Vector3d AngularVelocityFromOdometry();
+
+  // 重新锚定里程计：把最近一次里程计读数设为参考并清零里程计线速度。
+  // 用于轮组打滑/卡住后，把后续位姿预测重新锚定到校正后的位姿上，
+  // 避免继续跟随失真的里程计漂移。
+  void ResetOdometryAnchor();
   
 
   ExtrapolationResult ExtrapolatePosesWithGravity(

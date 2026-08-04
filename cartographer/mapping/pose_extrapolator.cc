@@ -243,6 +243,13 @@ transform::Rigid3d PoseExtrapolator::ExtrapolatePose(const common::Time time) {
 Eigen::Vector3d PoseExtrapolator::AngularVelocityFromOdometry() {
   return angular_velocity_from_odometry_;
 }
+
+void PoseExtrapolator::ResetOdometryAnchor() {
+  if (!odometry_data_.empty()) {
+    reference_odometry_ = odometry_data_.back();
+  }
+  linear_velocity_from_odometry_ = Eigen::Vector3d::Zero();
+}
 transform::Rigid3d PoseExtrapolator::ExtrapolatePoseLog(
     const common::Time time) {
   const TimedPose& newest_timed_pose = timed_pose_queue_.back();

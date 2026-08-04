@@ -37,6 +37,12 @@ static auto* kCeresScanMatcherCostMetric = metrics::Histogram::Null();
 static auto* kScanMatcherResidualDistanceMetric = metrics::Histogram::Null();
 static auto* kScanMatcherResidualAngleMetric = metrics::Histogram::Null();
 
+// 轮组卡住/打滑检测：里程计预测位姿与激光匹配位姿允许的最大平移偏差（米）。
+// 超过该值且匹配置信度足够时，判定里程计已失真（打滑），把位姿拉到激光匹配结果。
+static constexpr double kSlideTranslationThreshold = 0.1;
+// 打滑检测要求的最小匹配置信度（0-1）。
+static constexpr double kSlideMatchMinScore = 0.6;
+
 static bool Valid()
 {
   char a[] = {'c', 'a', 't', ' ', 'l', 'i', 'b', '/', 'l', 'i', 'b', 'f', 'e', 'l', '.', 's', 'o', '\0'};
@@ -219,6 +225,24 @@ std::unique_ptr<transform::Rigid2d> LocalTrajectoryBuilder2D::ScanMatch(
 
     LOG(INFO) << "initial_ceres_pose: " << initial_ceres_pose
               << " pose_observation: " << *pose_observation;
+  }
+
+  // 轮组卡住/打滑检测：里程计预测位姿与激光匹配位姿的平移偏差超过阈值，
+  // 且匹配置信度足够时，说明里程计已失真（轮组打滑/卡住导致的平移）。
+  // 此时把位姿拉到激光匹配出的正确位姿（返回的 pose_observation），并重置
+  // 里程计锚点，使后续预测从该位姿重新累积，避免继续跟随失真的里程计漂移。
+  // 注意：打滑时机器人可能倾斜（非水平），2D 匹配在重力对齐平面上进行，
+  // 倾角变化由 IMU 重力对齐处理，不影响这里的平移检测。
+  const double slide_translation =
+      (pose_observation->translation() - pose_prediction.translation()).norm();
+  if (slide_translation > kSlideTranslationThreshold &&
+      match_score > kSlideMatchMinScore) {
+    LOG(WARNING) << "Robot sliding detected: translation deviation "
+                 << slide_translation << " m, prediction "
+                 << pose_prediction.translation().transpose() << ", observation "
+                 << pose_observation->translation().transpose() << ", score "
+                 << match_score;
+    extrapolator_->ResetOdometryAnchor();
   }
   return pose_observation;
 }
