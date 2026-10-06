@@ -242,6 +242,13 @@ target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
   "${Boost_INCLUDE_DIRS}")
 target_link_libraries(${PROJECT_NAME} PUBLIC ${Boost_LIBRARIES})
 
+# libboost_iostreams.so references zlib/bzip2 symbols but does not declare
+# DT_NEEDED for them; with --no-copy-dt-needed-entries the final link must
+# provide -lz and -lbz2 explicitly (common in embedded cross-compile sysroots).
+find_library(ZLIB_LIBRARY z)
+find_library(BZIP2_LIBRARY bz2)
+target_link_libraries(${PROJECT_NAME} PUBLIC ${ZLIB_LIBRARY} ${BZIP2_LIBRARY})
+
 if (WIN32)
   find_package(glog REQUIRED)
   set(GLOG_LIBRARY glog::glog)

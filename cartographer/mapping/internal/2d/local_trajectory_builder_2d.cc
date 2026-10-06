@@ -44,7 +44,7 @@ static constexpr double kSlideTranslationThreshold = 0.1;
 // 打滑检测要求的最小匹配置信度（0-1）。
 static constexpr double kSlideMatchMinScore = 0.6;
 // 匹配后平移精细匹配：沿机器人前进方向（当前匹配角度）搜索的偏移范围（米）。
-static constexpr double kRefineTranslationRange = 0.3;
+static constexpr double kRefineTranslationRange = 0.5;
 
 static bool Valid()
 {
@@ -208,6 +208,37 @@ std::unique_ptr<transform::Rigid2d> LocalTrajectoryBuilder2D::ScanMatch(
       }
     }
   }
+#if 1
+  // 先使用默认的 realtime scan match 得到匹配位姿 (initial_ceres_pose),再在该
+  // 位姿上使用特殊窗口 (2° 角度 / 0.3m 距离) 的 realtime scan match 匹配一次;
+  // 若新分数更高则采用新位姿，之后再送入 ceres scan matcher 精匹配。
+  static std::unique_ptr<scan_matching::RealTimeCorrelativeScanMatcher2D>
+      real_time_refine_matcher;
+  if (real_time_refine_matcher == nullptr) {
+    auto refine_options =
+        options_.real_time_correlative_scan_matcher_options();
+    refine_options.set_angular_search_window(common::DegToRad(2.0));
+    refine_options.set_linear_search_window(0.3);
+    real_time_refine_matcher =
+        absl::make_unique<scan_matching::RealTimeCorrelativeScanMatcher2D>(
+            refine_options);
+  }
+  if(match_score > 0.5 && match_score < 0.7){
+    transform::Rigid2d refined_pose = initial_ceres_pose;
+    const double refined_score = real_time_refine_matcher->Match(
+        initial_ceres_pose, filtered_gravity_aligned_point_cloud,
+        *matching_submap->grid(), &refined_pose);
+    LOG(INFO) << "refine realtime score: " << refined_score
+              << ", previous score: " << match_score
+              << ", initial_ceres_pose: " << initial_ceres_pose
+              << ", refined_pose: " << refined_pose;
+    if (refined_score > match_score) {
+      initial_ceres_pose = refined_pose;
+      match_score = refined_score;
+      LOG(WARNING) << "adopt refined pose before ceres, new score: "
+                  << refined_score;
+    }
+  }
 
   auto pose_observation = absl::make_unique<transform::Rigid2d>();
   ceres::Solver::Summary summary;
@@ -229,70 +260,28 @@ std::unique_ptr<transform::Rigid2d> LocalTrajectoryBuilder2D::ScanMatch(
     LOG(INFO) << "initial_ceres_pose: " << initial_ceres_pose
               << " pose_observation: " << *pose_observation;
   }
+  #else
+   auto pose_observation = absl::make_unique<transform::Rigid2d>();
+  ceres::Solver::Summary summary;
+  ceres_scan_matcher_.Match(pose_prediction.translation(), initial_ceres_pose,
+                            filtered_gravity_aligned_point_cloud,
+                            *matching_submap->grid(), pose_observation.get(),
+                            &summary);
+  if (pose_observation) {
+    kCeresScanMatcherCostMetric->Observe(summary.final_cost);
+    const double residual_distance =
+        (pose_observation->translation() - pose_prediction.translation())
+            .norm();
+    kScanMatcherResidualDistanceMetric->Observe(residual_distance);
+    const double residual_angle =
+        std::abs(pose_observation->rotation().angle() -
+                 pose_prediction.rotation().angle());
+    kScanMatcherResidualAngleMetric->Observe(residual_angle);
 
-  // 在匹配位姿上再做一次平移精细匹配：固定当前角度，沿机器人前进方向
-  // （前/后）±0.3m 内逐一评分，若某个平移位姿得分更高则替换当前匹配位姿。
-  if (pose_observation != nullptr &&
-      matching_submap->grid()->GetGridType() == GridType::PROBABILITY_GRID) {
-    const ProbabilityGrid& probability_grid =
-        static_cast<const ProbabilityGrid&>(*matching_submap->grid());
-    auto score_at = [&](const transform::Rigid2d& pose) -> double {
-      double score = 0.0;
-      for (const sensor::RangefinderPoint& point :
-           filtered_gravity_aligned_point_cloud) {
-        const Eigen::Vector2d point_xy =
-            point.position.head<2>().cast<double>();
-        const Eigen::Array2i cell = probability_grid.limits().GetCellIndex(
-            (pose * point_xy).cast<float>());
-        score += probability_grid.GetProbability(cell);
-      }
-      return score /
-             static_cast<double>(filtered_gravity_aligned_point_cloud.size());
-    };
-
-    const transform::Rigid2d matched_pose = *pose_observation;
-    const Eigen::Rotation2Dd rotation = matched_pose.rotation();
-    const Eigen::Vector2d forward = rotation * Eigen::Vector2d::UnitX();
-    const double base_score = score_at(matched_pose);
-    double best_score = base_score;
-    transform::Rigid2d best_pose = matched_pose;
-    const double refine_step = matching_submap->grid()->limits().resolution();
-    for (double offset = -kRefineTranslationRange;
-         offset <= kRefineTranslationRange + 1e-9; offset += refine_step) {
-      const transform::Rigid2d candidate(
-          matched_pose.translation() + forward * offset, rotation);
-      const double candidate_score = score_at(candidate);
-      if (candidate_score > best_score) {
-        best_score = candidate_score;
-        best_pose = candidate;
-      }
-    }
-    if (best_score > base_score) {
-      LOG(INFO) << "ScanMatch translation refine: score " << base_score
-                << " -> " << best_score << ", offset "
-                << (best_pose.translation() - matched_pose.translation()).norm()
-                << " m, pose " << matched_pose << " -> " << best_pose;
-      *pose_observation = best_pose;
-    }
+    LOG(INFO) << "initial_ceres_pose: " << initial_ceres_pose
+              << " pose_observation: " << *pose_observation;
   }
-
-  // 轮组卡住/打滑检测：里程计预测位姿与激光匹配位姿的平移偏差超过阈值，
-  // 且匹配置信度足够时，说明里程计已失真（轮组打滑/卡住导致的平移）。
-  // 此时把位姿拉到激光匹配出的正确位姿（返回的 pose_observation），并重置
-  // 里程计锚点，使后续预测从该位姿重新累积，避免继续跟随失真的里程计漂移。
-  // 注意：打滑时机器人可能倾斜（非水平），2D 匹配在重力对齐平面上进行，
-  // 倾角变化由 IMU 重力对齐处理，不影响这里的平移检测。
-  const double slide_translation =
-      (pose_observation->translation() - pose_prediction.translation()).norm();
-  if (slide_translation > kSlideTranslationThreshold &&
-      match_score > kSlideMatchMinScore) {
-    LOG(WARNING) << "Robot sliding detected: translation deviation "
-                 << slide_translation << " m, prediction "
-                 << pose_prediction.translation().transpose() << ", observation "
-                 << pose_observation->translation().transpose() << ", score "
-                 << match_score;
-    extrapolator_->ResetOdometryAnchor();
-  }
+  #endif
   return pose_observation;
 }
 
@@ -541,7 +530,7 @@ LocalTrajectoryBuilder2D::AddAccumulatedRangeData(
 
   transform::Rigid3d pose_estimate =
       transform::Embed3D(*pose_estimate_2d) * gravity_alignment;
-
+#if 0
   if (fit_vector.z() != 0 &&
       std::abs(extrapolator_->AngularVelocityFromOdometry().z()) <
           common::DegToRad(60)) {
@@ -591,11 +580,7 @@ LocalTrajectoryBuilder2D::AddAccumulatedRangeData(
     LOG(INFO) << "No fit line --------------------------";
   }
 
-  if (score > 0) {
-    // LOG(INFO) << "ScanMatch Pose in: " << pose_prediction  <<
-    // "("<<pose_prediction.normalized_angle() * 180 / 3.1415 <<")"<<"Score: "
-    // << score;
-  }
+  #endif
 
   sensor::RangeData range_data_in_local =
       TransformRangeData(gravity_aligned_range_data,

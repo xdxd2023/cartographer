@@ -253,7 +253,7 @@ bool ActiveSubmaps2D::IsWrongFrame(const sensor::RangeData& range_data) {
         range_data, range_data_inserter_.get());
     LOG(INFO) << "changed: " << changed
               << " range_data.returns.size(): " << range_data.returns.size();
-    return (size_t)changed > range_data.returns.size();
+    return (size_t)changed > range_data.returns.size() / 2;
   }
   return false;
 }

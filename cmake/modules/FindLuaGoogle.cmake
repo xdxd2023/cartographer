@@ -94,7 +94,7 @@ function(_lua_set_version_vars)
         set(_lua_append_versions ${LUA_VERSIONS5})
     endif ()
 
-    list(APPEND _lua_include_subdirs "include/lua" "include")
+    list(APPEND _lua_include_subdirs "include/lua" "include" "usr/include")
 
 
     foreach (ver IN LISTS _lua_append_versions)
@@ -173,6 +173,10 @@ if (NOT LUA_VERSION_STRING)
         message(STATUS "SYSROOT: $ENV{SYSROOT}/${subdir}/lua.h")
         message(STATUS "Found LUA_INCLUDE_PREFIX: ${LUA_INCLUDE_PREFIX}")
         # Check if $ENV{SYSROOT}/${subdir}/lua.h exists and set LUA_INCLUDE_PREFIX accordingly
+        if(EXISTS "$ENV{COMMON_DIR}/${subdir}/lua.h")
+            set(LUA_INCLUDE_PREFIX "$ENV{COMMON_DIR}")
+            message(STATUS "Found lua.h in COMMON_DIR: $ENV{COMMON_DIR}/${subdir}/lua.h")
+        endif()
         if(EXISTS "$ENV{SYSROOT}/${subdir}/lua.h")
             set(LUA_INCLUDE_PREFIX "$ENV{SYSROOT}")
             message(STATUS "Found lua.h in SYSROOT: $ENV{SYSROOT}/${subdir}/lua.h")
